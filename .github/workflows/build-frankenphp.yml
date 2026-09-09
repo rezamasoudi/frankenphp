@@ -86,9 +86,9 @@ jobs:
 
       - name: Smoke test
         run: |
-          ./${{ matrix.target }} php -v
-          ./${{ matrix.target }} php -m
-          ./${{ matrix.target }} php -r 'var_dump(extension_loaded("redis"), extension_loaded("pdo_mysql"), extension_loaded("intl"));'
+          ./frankenphp-${{ matrix.target }} php -v
+          ./frankenphp-${{ matrix.target }} php -m
+          ./frankenphp-${{ matrix.target }} php -r 'var_dump(extension_loaded("redis"), extension_loaded("pdo_mysql"), extension_loaded("intl"));'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
