@@ -11,7 +11,6 @@ permissions:
 
 env:
   PHP_VERSION: "8.3"
-  SPC_VERSION: "nightly"
 
 jobs:
   build:
@@ -52,9 +51,15 @@ jobs:
       - name: Setup static-php-cli
         id: spc
         run: |
+          if [ "${{ matrix.target }}" = "linux-x86_64" ]; then
+            SPC_ARCH="x86_64"
+          else
+            SPC_ARCH="aarch64"
+          fi
           curl -fsSL -o /usr/local/bin/spc \
-            "https://dl.static-php.dev/static-php-cli/spc-bin/${SPC_VERSION}/spc-linux-${{ matrix.goarch }}"
+            "https://dl.static-php.dev/static-php-cli/spc-bin/nightly/spc-linux-${SPC_ARCH}"
           chmod +x /usr/local/bin/spc
+          /usr/local/bin/spc --version
           echo "bin=/usr/local/bin/spc" >> $GITHUB_OUTPUT
 
       # ---------- دانلود و بیلد PHP ----------
