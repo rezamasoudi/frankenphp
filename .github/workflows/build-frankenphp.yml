@@ -1,0 +1,192 @@
+name: Build FrankenPHP (PHP 8.3) & Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PHP_VERSION: "8.3"
+  SPC_VERSION: "2.4.2"
+
+jobs:
+  build:
+    name: Build static binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: ubuntu-22.04-arm
+            target: linux-aarch64
+          - os: macos-14
+            target: darwin-aarch64
+          - os: macos-13
+            target: darwin-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer
+
+      # ---------- LINUX ----------
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool bison re2c pkg-config \
+            ca-certificates curl git xz-utils bzip2 unzip zip ninja-build \
+            libxml2-dev libsqlite3-dev libcurl4-openssl-dev libonig-dev \
+            libssl-dev zlib1g-dev libzip-dev libreadline-dev libbrotli-dev \
+            libicu-dev libbz2-dev libpng-dev libjpeg-dev libfreetype6-dev \
+            libwebp-dev libxpm-dev libmagickwand-dev libmagickcore-dev \
+            libpq-dev libyaml-dev libedit-dev
+          # Go >= 1.21
+          wget -q https://go.dev/dl/go1.22.5.linux-amd64.tar.gz -O /tmp/go.tgz || \
+            wget -q https://go.dev/dl/go1.22.5.linux-arm64.tar.gz -O /tmp/go.tgz
+          sudo tar -C /usr/local -xzf /tmp/go.tgz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+
+      # ---------- macOS ----------
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install autoconf automake libtool bison re2c pkg-config ninja \
+            openssl@3 zlib curl oniguruma libzip icu4c bzip2 libpng jpeg-turbo \
+            freetype webp libxpm imagemagick libpq libyaml gettext
+          brew install go
+
+      # ---------- static-php-cli ----------
+      - name: Setup static-php-cli
+        id: spc
+        run: |
+          git clone --depth 1 --branch "${SPC_VERSION}" \
+            https://github.com/crazywhalecc/static-php-cli.git spc
+          cd spc
+          composer install --no-interaction --no-progress
+          echo "bin=$(pwd)/bin/spc" >> $GITHUB_OUTPUT
+
+      # همه‌ی اکستنشن‌های رایج لاراول + ردیس + تصویر + شبکه + فشرده‌سازی
+      - name: Download sources
+        run: |
+          ${{ steps.spc.outputs.bin }} doctor --auto-fix || true
+          ${{ steps.spc.outputs.bin }} download --for-extensions \
+            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,protobuf,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd,gettext,ffi" \
+            --debug --prefer-pre-built
+
+      - name: Build PHP (${{ env.PHP_VERSION }})
+        run: |
+          ${{ steps.spc.outputs.bin }} build --build-cli \
+            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,protobuf,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd,gettext,ffi" \
+            --with-php=${PHP_VERSION}
+
+      # ---------- FrankenPHP ----------
+      - name: Clone & build FrankenPHP
+        run: |
+          git clone --depth 1 https://github.com/dunglas/frankenphp.git
+          cd frankenphp
+          export FRANKENPHP_PHP_BINARY=$(ls ../spc/buildroot/bin/php | head -1)
+          cd caddy && go mod download && cd ..
+          go build -v \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME:-dev}" \
+            -o frankenphp-${{ matrix.target }} ./cli
+          cp frankenphp-${{ matrix.target }} "${GITHUB_WORKSPACE}/"
+
+      - name: Smoke test
+        run: |
+          ./${{ matrix.target }} php -v
+          ./${{ matrix.target }} php -m
+          ./${{ matrix.target }} php -r 'var_dump(extension_loaded("redis"), extension_loaded("pdo_mysql"), extension_loaded("intl"));'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frankenphp-${{ matrix.target }}
+          path: frankenphp-*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create install script
+        run: |
+          cat > install.sh <<'EOF'
+          #!/bin/sh
+          set -e
+          REPO="${FRANKENPHP_REPO:-$GITHUB_REPOSITORY}"
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m)
+          case "$ARCH" in x86_64) ARCH=x86_64;; aarch64|arm64) ARCH=aarch64;; esac
+          TAG="${1:-latest}"
+          if [ "$TAG" = "latest" ]; then
+            URL="https://github.com/$REPO/releases/latest/download/frankenphp-$OS-$ARCH"
+          else
+            URL="https://github.com/$REPO/releases/download/$TAG/frankenphp-$OS-$ARCH"
+          fi
+          curl -fsSL "$URL" -o /usr/local/bin/frankenphp
+          chmod +x /usr/local/bin/frankenphp
+          echo "frankenphp installed -> $(frankenphp version)"
+          EOF
+          chmod +x install.sh
+
+      - name: Compress binaries
+        run: |
+          cd dist
+          for f in frankenphp-*; do
+            tar -czf "$f.tar.gz" "$f"
+            sha256sum "$f" "$f.tar.gz" >> checksums.txt
+          done
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            install.sh
+          body: |
+            ## FrankenPHP (PHP 8.3, static)
+
+            باینری استاتیک FrankenPHP با PHP 8.3 و اکستنشن‌های کامل لاراول:
+            `redis, pdo_mysql, pdo_pgsql, pdo_sqlite, mysqli, gd, imagick, intl, mbstring, zip, bcmath, opcache, pcntl, soap, sockets, sodium, gmp, ldap, apcu, igbinary, zstd, bz2, curl, openssl, ffi` و ...
+
+            ### نصب با یک خط:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+            ```
+
+            ### نصب نسخه‌ی مشخص:
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh -s -- v1.0.0
+            ```
+
+            ### اجرای پروژه لاراول:
+            ```bash
+            cd /path/to/laravel
+            frankenphp php-server -n
+            ```
+
+            ### checksums
+            فایل `checksums.txt` کنار باینری‌ها موجود است.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
