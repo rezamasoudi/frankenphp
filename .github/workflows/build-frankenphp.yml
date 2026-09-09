@@ -11,7 +11,7 @@ permissions:
 
 env:
   PHP_VERSION: "8.3"
-  SPC_VERSION: "2.4.2"
+  SPC_VERSION: "nightly"
 
 jobs:
   build:
