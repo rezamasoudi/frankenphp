@@ -15,7 +15,7 @@ env:
 
 jobs:
   build:
-    name: Build static binary (${{ matrix.os }})
+    name: Build static binary (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,26 +23,16 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: linux-x86_64
+            goarch: amd64
           - os: ubuntu-22.04-arm
             target: linux-aarch64
-          - os: macos-14
-            target: darwin-aarch64
-          - os: macos-13
-            target: darwin-x86_64
+            goarch: arm64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.3"
-          tools: composer
-
-      # ---------- LINUX ----------
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -52,45 +42,35 @@ jobs:
             libssl-dev zlib1g-dev libzip-dev libreadline-dev libbrotli-dev \
             libicu-dev libbz2-dev libpng-dev libjpeg-dev libfreetype6-dev \
             libwebp-dev libxpm-dev libmagickwand-dev libmagickcore-dev \
-            libpq-dev libyaml-dev libedit-dev
-          # Go >= 1.21
-          wget -q https://go.dev/dl/go1.22.5.linux-amd64.tar.gz -O /tmp/go.tgz || \
-            wget -q https://go.dev/dl/go1.22.5.linux-arm64.tar.gz -O /tmp/go.tgz
+            libpq-dev libyaml-dev libedit-dev musl-tools
+          # Go
+          wget -q "https://go.dev/dl/go1.22.5.linux-${{ matrix.goarch }}.tar.gz" -O /tmp/go.tgz
           sudo tar -C /usr/local -xzf /tmp/go.tgz
           echo "/usr/local/go/bin" >> $GITHUB_PATH
 
-      # ---------- macOS ----------
-      - name: Install build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install autoconf automake libtool bison re2c pkg-config ninja \
-            openssl@3 zlib curl oniguruma libzip icu4c bzip2 libpng jpeg-turbo \
-            freetype webp libxpm imagemagick libpq libyaml gettext
-          brew install go
-
-      # ---------- static-php-cli ----------
+      # ---------- static-php-cli (باینری آماده، بدون composer) ----------
       - name: Setup static-php-cli
         id: spc
         run: |
-          git clone --depth 1 --branch "${SPC_VERSION}" \
-            https://github.com/crazywhalecc/static-php-cli.git spc
-          cd spc
-          composer install --no-interaction --no-progress
-          echo "bin=$(pwd)/bin/spc" >> $GITHUB_OUTPUT
+          curl -fsSL -o /usr/local/bin/spc \
+            "https://dl.static-php.dev/static-php-cli/spc-bin/${SPC_VERSION}/spc-linux-${{ matrix.goarch }}"
+          chmod +x /usr/local/bin/spc
+          echo "bin=/usr/local/bin/spc" >> $GITHUB_OUTPUT
 
-      # همه‌ی اکستنشن‌های رایج لاراول + ردیس + تصویر + شبکه + فشرده‌سازی
+      # ---------- دانلود و بیلد PHP ----------
       - name: Download sources
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ${{ steps.spc.outputs.bin }} doctor --auto-fix || true
-          ${{ steps.spc.outputs.bin }} download --for-extensions \
-            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,protobuf,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd,gettext,ffi" \
-            --debug --prefer-pre-built
+          spc doctor --auto-fix || true
+          spc download --for-extensions \
+            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd" \
+            --prefer-pre-built
 
       - name: Build PHP (${{ env.PHP_VERSION }})
         run: |
-          ${{ steps.spc.outputs.bin }} build --build-cli \
-            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,protobuf,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd,gettext,ffi" \
+          spc build --build-cli \
+            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,readline,redis,session,shmop,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd" \
             --with-php=${PHP_VERSION}
 
       # ---------- FrankenPHP ----------
@@ -99,9 +79,8 @@ jobs:
           git clone --depth 1 https://github.com/dunglas/frankenphp.git
           cd frankenphp
           export FRANKENPHP_PHP_BINARY=$(ls ../spc/buildroot/bin/php | head -1)
-          cd caddy && go mod download && cd ..
           go build -v \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME:-dev}" \
+            -ldflags "-s -w" \
             -o frankenphp-${{ matrix.target }} ./cli
           cp frankenphp-${{ matrix.target }} "${GITHUB_WORKSPACE}/"
 
@@ -165,10 +144,10 @@ jobs:
             dist/*
             install.sh
           body: |
-            ## FrankenPHP (PHP 8.3, static)
+            ## FrankenPHP (PHP 8.3, static — Linux)
 
             باینری استاتیک FrankenPHP با PHP 8.3 و اکستنشن‌های کامل لاراول:
-            `redis, pdo_mysql, pdo_pgsql, pdo_sqlite, mysqli, gd, imagick, intl, mbstring, zip, bcmath, opcache, pcntl, soap, sockets, sodium, gmp, ldap, apcu, igbinary, zstd, bz2, curl, openssl, ffi` و ...
+            `redis, pdo_mysql, pdo_pgsql, pdo_sqlite, mysqli, gd, imagick, intl, mbstring, zip, bcmath, opcache, pcntl, soap, sockets, sodium, gmp, ldap, apcu, igbinary, zstd, bz2, curl, openssl`
 
             ### نصب با یک خط:
             ```bash
@@ -183,7 +162,7 @@ jobs:
             ### اجرای پروژه لاراول:
             ```bash
             cd /path/to/laravel
-            frankenphp php-server -n
+            frankenphp php-server
             ```
 
             ### checksums
