@@ -73,12 +73,12 @@ jobs:
             --prefer-pre-built
 
       - name: Build PHP + FrankenPHP (${{ env.PHP_VERSION }})
-              run: |
-                spc build --build-cli --build-frankenphp \
-                  "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pgsql,phar,posix,readline,redis,session,shmop,soap,sockets,sodium,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd"
-                ls -lh buildroot/bin/
-                cp buildroot/bin/frankenphp "frankenphp-${{ matrix.target }}"
-                cp buildroot/bin/php "php-${{ matrix.target }}" || true
+        run: |
+          spc build --build-cli --build-frankenphp \
+            "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,igbinary,imagick,intl,ldap,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pgsql,phar,posix,readline,redis,session,shmop,soap,sockets,sodium,sysvmsg,sysvsem,sysvshm,tidy,tokenizer,xml,xmlreader,xmlwriter,zip,zlib,zstd"
+          ls -lh buildroot/bin/
+          cp buildroot/bin/frankenphp "frankenphp-${{ matrix.target }}"
+          cp buildroot/bin/php "php-${{ matrix.target }}" || true
 
       - name: Smoke test
         run: |
